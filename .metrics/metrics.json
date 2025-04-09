@@ -1,0 +1,33 @@
+{
+  "operations": {
+    "gets": 0,
+    "hits": 0,
+    "misses": 0,
+    "puts": 0,
+    "evictions": 0,
+    "expirations": 0
+  },
+  "performance": {
+    "hit_rate": 0,
+    "avg_get_time": 0,
+    "avg_put_time": 0
+  },
+  "prefetch": {
+    "hits": 0,
+    "misses": 0,
+    "hit_rate": 0
+  },
+  "prediction": {
+    "hits": 0,
+    "misses": 0,
+    "accuracy": 0
+  },
+  "distributed": {
+    "gets": 0,
+    "puts": 0,
+    "hits": 0,
+    "misses": 0,
+    "hit_rate": 0
+  },
+  "timestamp": 1744210964.7761881
+}
