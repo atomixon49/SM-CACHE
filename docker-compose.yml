@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  cache-node-1:
+    build: .
+    ports:
+      - "6379:6379"
+      - "8000:8000"
+      - "9090:9090"
+    environment:
+      - MAX_MEMORY_MB=1000
+      - ENABLE_SECURITY=true
+      - ENABLE_MONITORING=true
+      - DISTRIBUTED_HOST=cache-node-1
+      - DISTRIBUTED_PORT=6379
+      - CLUSTER_NODES=cache-node-2:6379,cache-node-3:6379
+    volumes:
+      - cache-data-1:/app/data
+      - ./config:/app/config
+    networks:
+      - cache-network
+
+  cache-node-2:
+    build: .
+    ports:
+      - "6380:6379"
+      - "8001:8000"
+      - "9091:9090"
+    environment:
+      - MAX_MEMORY_MB=1000
+      - ENABLE_SECURITY=true
+      - ENABLE_MONITORING=true
+      - DISTRIBUTED_HOST=cache-node-2
+      - DISTRIBUTED_PORT=6379
+      - CLUSTER_NODES=cache-node-1:6379,cache-node-3:6379
+    volumes:
+      - cache-data-2:/app/data
+      - ./config:/app/config
+    networks:
+      - cache-network
+
+  cache-node-3:
+    build: .
+    ports:
+      - "6381:6379"
+      - "8002:8000"
+      - "9092:9090"
+    environment:
+      - MAX_MEMORY_MB=1000
+      - ENABLE_SECURITY=true
+      - ENABLE_MONITORING=true
+      - DISTRIBUTED_HOST=cache-node-3
+      - DISTRIBUTED_PORT=6379
+      - CLUSTER_NODES=cache-node-1:6379,cache-node-2:6379
+    volumes:
+      - cache-data-3:/app/data
+      - ./config:/app/config
+    networks:
+      - cache-network
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9093:9090"
+    volumes:
+      - ./config/prometheus:/etc/prometheus
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - cache-network
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config/grafana:/etc/grafana/provisioning
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
+    networks:
+      - cache-network
+
+volumes:
+  cache-data-1:
+  cache-data-2:
+  cache-data-3:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  cache-network:
+    driver: bridge

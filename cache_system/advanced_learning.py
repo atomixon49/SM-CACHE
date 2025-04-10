@@ -1,11 +1,277 @@
 """
-Módulo para algoritmos de aprendizaje avanzados en el sistema de caché inteligente.
+Sistema de aprendizaje avanzado y predicción de patrones.
 """
-from typing import Dict, Any, List, Tuple, Set, Optional, Counter as CounterType
-from collections import Counter, defaultdict
+from typing import List, Dict, Any, Optional, Tuple, Set
+import numpy as np
+from scipy import stats
+from sklearn.ensemble import IsolationForest
+import logging
 import time
+from collections import deque, Counter, defaultdict
 import math
 from .usage_tracker import UsageTracker
+
+
+class PatternAnalyzer:
+    """Analizador de patrones para detección de anomalías y predicciones."""
+    
+    def __init__(self, window_size: int = 1000,
+                 anomaly_threshold: float = 0.95,
+                 trend_window: int = 60):
+        """
+        Inicializa el analizador de patrones.
+        
+        Args:
+            window_size: Tamaño de la ventana de datos históricos
+            anomaly_threshold: Umbral para detección de anomalías
+            trend_window: Ventana para análisis de tendencias (segundos)
+        """
+        self.window_size = window_size
+        self.anomaly_threshold = anomaly_threshold
+        self.trend_window = trend_window
+        
+        # Históricos
+        self.memory_history: deque = deque(maxlen=window_size)
+        self.latency_history: deque = deque(maxlen=window_size)
+        self.hit_rate_history: deque = deque(maxlen=window_size)
+        
+        # Modelos
+        self.isolation_forest = IsolationForest(contamination=0.1)
+        self.model_trained = False
+        
+        # Estado
+        self.baseline_stats: Dict[str, Dict[str, float]] = {}
+        
+        # Logging
+        self.logger = logging.getLogger("PatternAnalyzer")
+    
+    def add_metrics(self, metrics: Dict[str, Any]) -> None:
+        """
+        Añade nuevas métricas al análisis.
+        
+        Args:
+            metrics: Diccionario con métricas actuales
+        """
+        timestamp = time.time()
+        
+        # Extraer métricas relevantes
+        memory_usage = metrics.get('memory_usage', {}).get('memory_usage_percent', 0)
+        latency = metrics.get('performance', {}).get('avg_get_time', 0)
+        hit_rate = metrics.get('performance', {}).get('hit_rate', 0)
+        
+        # Almacenar datos
+        self.memory_history.append((timestamp, memory_usage))
+        self.latency_history.append((timestamp, latency))
+        self.hit_rate_history.append((timestamp, hit_rate))
+        
+        # Entrenar modelo si hay suficientes datos
+        if len(self.memory_history) >= 100 and not self.model_trained:
+            self._train_models()
+    
+    def _train_models(self) -> None:
+        """Entrena los modelos de detección de anomalías."""
+        try:
+            # Preparar datos
+            X = np.array([
+                [m[1] for m in self.memory_history],
+                [l[1] for l in self.latency_history],
+                [h[1] for h in self.hit_rate_history]
+            ]).T
+            
+            # Entrenar modelo
+            self.isolation_forest.fit(X)
+            self.model_trained = True
+            
+            # Calcular líneas base
+            self.baseline_stats = {
+                'memory': {
+                    'mean': np.mean([m[1] for m in self.memory_history]),
+                    'std': np.std([m[1] for m in self.memory_history])
+                },
+                'latency': {
+                    'mean': np.mean([l[1] for l in self.latency_history]),
+                    'std': np.std([l[1] for l in self.latency_history])
+                },
+                'hit_rate': {
+                    'mean': np.mean([h[1] for h in self.hit_rate_history]),
+                    'std': np.std([h[1] for h in self.hit_rate_history])
+                }
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error entrenando modelos: {e}")
+    
+    def detect_anomalies(self, current_metrics: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Detecta anomalías en las métricas actuales.
+        
+        Args:
+            current_metrics: Métricas actuales
+            
+        Returns:
+            Lista de anomalías detectadas
+        """
+        anomalies = []
+        
+        if not self.model_trained:
+            return anomalies
+            
+        try:
+            # Preparar datos actuales
+            X = np.array([[
+                current_metrics.get('memory_usage', {}).get('memory_usage_percent', 0),
+                current_metrics.get('performance', {}).get('avg_get_time', 0),
+                current_metrics.get('performance', {}).get('hit_rate', 0)
+            ]])
+            
+            # Detectar anomalías
+            prediction = self.isolation_forest.predict(X)
+            
+            if prediction[0] == -1:  # Anomalía detectada
+                # Analizar qué métricas son anómalas
+                memory = X[0][0]
+                latency = X[0][1]
+                hit_rate = X[0][2]
+                
+                for metric, value, baseline in [
+                    ('memory', memory, self.baseline_stats['memory']),
+                    ('latency', latency, self.baseline_stats['latency']),
+                    ('hit_rate', hit_rate, self.baseline_stats['hit_rate'])
+                ]:
+                    z_score = (value - baseline['mean']) / baseline['std']
+                    
+                    if abs(z_score) > stats.norm.ppf(self.anomaly_threshold):
+                        anomalies.append({
+                            'metric': metric,
+                            'value': value,
+                            'z_score': z_score,
+                            'baseline_mean': baseline['mean'],
+                            'baseline_std': baseline['std'],
+                            'severity': 'high' if abs(z_score) > 3 else 'medium'
+                        })
+                        
+        except Exception as e:
+            self.logger.error(f"Error detectando anomalías: {e}")
+            
+        return anomalies
+    
+    def analyze_trends(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Analiza tendencias en las métricas.
+        
+        Returns:
+            Diccionario con análisis de tendencias
+        """
+        current_time = time.time()
+        window_start = current_time - self.trend_window
+        
+        trends = {}
+        
+        for metric_name, history in [
+            ('memory', self.memory_history),
+            ('latency', self.latency_history),
+            ('hit_rate', self.hit_rate_history)
+        ]:
+            # Filtrar datos en la ventana de tiempo
+            recent_data = [
+                (t, v) for t, v in history
+                if t >= window_start
+            ]
+            
+            if len(recent_data) < 2:
+                continue
+                
+            # Calcular tendencia
+            times, values = zip(*recent_data)
+            slope, _, r_value, _, _ = stats.linregress(times, values)
+            
+            # Determinar dirección y fuerza de la tendencia
+            direction = 'stable'
+            if abs(slope) > 0.01:
+                direction = 'increasing' if slope > 0 else 'decreasing'
+                
+            strength = abs(r_value)
+            
+            trends[metric_name] = {
+                'direction': direction,
+                'strength': strength,
+                'slope': slope,
+                'r_squared': r_value ** 2
+            }
+            
+        return trends
+    
+    def predict_threshold_breach(self, metric: str,
+                               threshold: float,
+                               horizon: int = 300) -> Optional[float]:
+        """
+        Predice tiempo hasta alcanzar un umbral.
+        
+        Args:
+            metric: Nombre de la métrica
+            threshold: Valor umbral
+            horizon: Horizonte de predicción en segundos
+            
+        Returns:
+            Tiempo estimado hasta alcanzar el umbral (None si no se alcanza)
+        """
+        history = {
+            'memory': self.memory_history,
+            'latency': self.latency_history,
+            'hit_rate': self.hit_rate_history
+        }.get(metric)
+        
+        if not history or len(history) < 2:
+            return None
+            
+        try:
+            times, values = zip(*history)
+            slope, intercept, _, _, _ = stats.linregress(times, values)
+            
+            if abs(slope) < 1e-6:  # Pendiente casi plana
+                return None
+                
+            current_time = time.time()
+            breach_time = (threshold - intercept) / slope
+            
+            if current_time <= breach_time <= current_time + horizon:
+                return breach_time - current_time
+                
+        except Exception as e:
+            self.logger.error(f"Error prediciendo umbral: {e}")
+            
+        return None
+    
+    def get_dynamic_thresholds(self) -> Dict[str, Dict[str, float]]:
+        """
+        Calcula umbrales dinámicos basados en el comportamiento histórico.
+        
+        Returns:
+            Diccionario con umbrales por métrica
+        """
+        thresholds = {}
+        
+        for metric, history in [
+            ('memory', self.memory_history),
+            ('latency', self.latency_history),
+            ('hit_rate', self.hit_rate_history)
+        ]:
+            if not history:
+                continue
+                
+            values = [v for _, v in history]
+            mean = np.mean(values)
+            std = np.std(values)
+            
+            thresholds[metric] = {
+                'warning': mean + 2 * std,
+                'critical': mean + 3 * std,
+                'baseline': mean,
+                'lower_warning': mean - 2 * std,
+                'lower_critical': mean - 3 * std
+            }
+            
+        return thresholds
 
 
 class MarkovChainPredictor:

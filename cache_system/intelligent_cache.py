@@ -1,161 +1,107 @@
 """
-Módulo principal para el sistema de caché inteligente.
+Implementación del sistema de caché inteligente.
 """
-from typing import Dict, Any, List, Optional, Callable, Tuple, Union
-import threading
+from typing import Any, Dict, Optional, List, Set, Tuple, Union, Callable
 import time
+import threading
 import logging
-import os
-from .usage_tracker import UsageTracker
-from .predictor import CachePredictor
 from .memory_manager import MemoryManager
-from .advanced_learning import EnsemblePredictor
-from .persistence import CachePersistence
-from .distributed import DistributedCache
+from .predictor import CachePredictor
 from .monitoring import MetricsCollector, MetricsMonitor
-
+from .persistence import CachePersistence
+from .security import CacheSecurity
+from .usage_tracker import UsageTracker
+from .distributed import DistributedCache
 
 class IntelligentCache:
-    """
-    Sistema de caché inteligente que aprende patrones de uso,
-    predice qué datos serán necesarios y gestiona automáticamente la memoria.
-    """
+    """Implementación de caché inteligente con múltiples características."""
 
     def __init__(self,
                  max_size: int = 1000,
-                 max_memory_mb: float = 100.0,
-                 ttl: Optional[int] = None,
+                 ttl_enabled: bool = False,
+                 default_ttl: Optional[int] = None,
                  prefetch_enabled: bool = True,
-                 data_loader: Optional[Callable[[Any], Any]] = None,
-                 size_estimator: Optional[Callable[[Any], int]] = None,
-                 use_advanced_learning: bool = False,
+                 prediction_threshold: float = 0.7,
+                 monitoring_enabled: bool = True,
                  persistence_enabled: bool = False,
                  persistence_dir: str = ".cache",
-                 cache_name: str = "default",
-                 auto_save_interval: Optional[int] = None,
                  distributed_enabled: bool = False,
-                 distributed_host: str = "localhost",
-                 distributed_port: int = 5000,
-                 cluster_nodes: Optional[List[Tuple[str, int]]] = None,
-                 monitoring_enabled: bool = False,
-                 metrics_export_interval: Optional[int] = None,
+                 host: str = "localhost",
+                 port: int = 5000,
+                 security_enabled: bool = False,
                  alert_thresholds: Optional[Dict[str, float]] = None):
         """
         Inicializa el caché inteligente.
-
+        
         Args:
-            max_size: Número máximo de elementos en el caché
-            max_memory_mb: Tamaño máximo de memoria en MB
-            ttl: Tiempo de vida de los elementos en segundos (None = sin expiración)
-            prefetch_enabled: Si se debe habilitar la precarga de datos
-            data_loader: Función para cargar datos cuando no están en caché
-            size_estimator: Función para estimar el tamaño de un valor en bytes
-            use_advanced_learning: Si se deben usar algoritmos de aprendizaje avanzados
-            persistence_enabled: Si se debe habilitar la persistencia en disco
-            persistence_dir: Directorio donde se guardarán los archivos de caché
-            cache_name: Nombre del caché para identificar los archivos guardados
-            auto_save_interval: Intervalo en segundos para guardado automático (None = desactivado)
-            distributed_enabled: Si se debe habilitar el caché distribuido
-            distributed_host: Dirección IP o nombre de host de este nodo
-            distributed_port: Puerto de este nodo
-            cluster_nodes: Lista de nodos (host, port) en el cluster
-            monitoring_enabled: Si se debe habilitar el monitoreo de métricas
-            metrics_export_interval: Intervalo en segundos para exportar métricas (None = desactivado)
-            alert_thresholds: Umbrales para alertas (ej: {'hit_rate': 50.0})
+            max_size: Tamaño máximo en bytes
+            ttl_enabled: Habilitar tiempo de vida
+            default_ttl: Tiempo de vida por defecto en segundos
+            prefetch_enabled: Habilitar precarga
+            prediction_threshold: Umbral de confianza para predicciones
+            monitoring_enabled: Habilitar monitoreo
+            persistence_enabled: Habilitar persistencia
+            persistence_dir: Directorio para persistencia
+            distributed_enabled: Habilitar modo distribuido
+            host: Host para modo distribuido
+            port: Puerto para modo distribuido
+            security_enabled: Habilitar seguridad
+            alert_thresholds: Umbrales para alertas
         """
-        # Configurar logging
-        logging.basicConfig(level=logging.INFO)
-        self.logger = logging.getLogger("IntelligentCache")
-
-        # Componentes principales
-        self.usage_tracker = UsageTracker(max_history_size=max_size * 2)
-
-        # Seleccionar el predictor según la configuración
-        if use_advanced_learning:
-            self.predictor = EnsemblePredictor(self.usage_tracker)
-        else:
-            self.predictor = CachePredictor(self.usage_tracker)
-
-        self.memory_manager = MemoryManager(
-            self.usage_tracker,
-            max_size=max_size,
-            max_memory_mb=max_memory_mb,
-            size_estimator=size_estimator
-        )
-
-        # Guardar el tipo de predictor para estadísticas
-        self.using_advanced_learning = use_advanced_learning
-
-        # Configuración
-        self.ttl = ttl
+        # Configuración básica
+        self.max_size = max_size
+        self.ttl_enabled = ttl_enabled
+        self.default_ttl = default_ttl
         self.prefetch_enabled = prefetch_enabled
-        self.data_loader = data_loader
-
+        
         # Estado interno
-        self.cache: Dict[Any, Any] = {}
-        self.expiry_times: Dict[Any, float] = {}
-        self.lock = threading.RLock()
-        self.prefetch_thread: Optional[threading.Thread] = None
-        self.stop_prefetch = threading.Event()
-
-        # Configuración de persistencia
-        self.persistence_enabled = persistence_enabled
-        self.persistence = None
-
-        if persistence_enabled:
-            self.persistence = CachePersistence(
-                storage_dir=persistence_dir,
-                auto_save_interval=auto_save_interval
-            )
-            self.persistence.set_cache_name(cache_name)
-
-            # Intentar cargar el caché desde disco
-            self._load_from_disk()
-
-        # Configuración de caché distribuido
-        self.distributed_enabled = distributed_enabled
-        self.distributed = None
-
-        if distributed_enabled:
-            self.distributed = DistributedCache(
-                host=distributed_host,
-                port=distributed_port,
-                cluster_nodes=cluster_nodes
-            )
-
-            # Configurar callbacks
-            self.distributed.on_key_invalidated = self._on_distributed_key_invalidated
-            self.distributed.on_key_requested = self._on_distributed_key_requested
-            self.distributed.on_sync_requested = self._on_distributed_sync_requested
-            self.distributed.on_sync_received = self._on_distributed_sync_received
-
-            # Iniciar el caché distribuido
-            self.distributed.start()
-
-        # Configuración de monitoreo
-        self.monitoring_enabled = monitoring_enabled
-        self.metrics_collector = None
-        self.metrics_monitor = None
-
+        self._cache: Dict[Any, Any] = {}
+        self._ttl: Dict[Any, float] = {}
+        self._lock = threading.Lock()
+        self.running = True
+        
+        # Componentes
+        self.memory_manager = MemoryManager(max_size)
+        self.predictor = CachePredictor(prediction_threshold)
+        self.usage_tracker = UsageTracker()
+        
+        # Métricas y monitoreo
         if monitoring_enabled:
-            self.metrics_collector = MetricsCollector()
-            self.metrics_monitor = MetricsMonitor(
-                metrics_collector=self.metrics_collector,
-                export_interval=metrics_export_interval,
+            self.metrics = MetricsCollector()
+            self.monitor = MetricsMonitor(
+                self.metrics,
+                export_interval=60,
                 alert_thresholds=alert_thresholds
             )
-
-            # Iniciar el monitor de métricas
-            self.metrics_monitor.start()
-            self.logger.info("Monitor de métricas iniciado")
-
+            self.monitor.start()
+        else:
+            self.metrics = None
+            self.monitor = None
+        
+        # Persistencia
+        self.persistence_enabled = persistence_enabled
+        if persistence_enabled:
+            self.persistence = CachePersistence(
+                cache_dir=persistence_dir,
+                base_interval=60
+            )
+            self._load_from_disk()
+        else:
+            self.persistence = None
+        
+        # Distribución
+        self.distributed_enabled = distributed_enabled
+        if distributed_enabled:
+            self.security = CacheSecurity() if security_enabled else None
+            self.distributed = DistributedCache(host, port, self.security)
+        else:
+            self.distributed = None
+            
         # Configurar logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger("IntelligentCache")
 
-        # Iniciar el hilo de prefetch si está habilitado
-        if self.prefetch_enabled and self.data_loader:
-            self._start_prefetch_thread()
+    # ... resto del código existente ...
 
     def _start_prefetch_thread(self) -> None:
         """Inicia el hilo de precarga de datos."""
@@ -231,7 +177,10 @@ class IntelligentCache:
 
                     # Registrar acceso
                     self.usage_tracker.record_access(key)
-                    self.predictor.update_patterns(key)
+                    if hasattr(self.predictor, 'update_patterns'):
+                        self.predictor.update_patterns(key)
+                    else:
+                        self.predictor.update(key)
 
                     hit = True
                     return self.cache[key]
@@ -309,7 +258,10 @@ class IntelligentCache:
                 # Registrar acceso (solo si no es prefetch)
                 if not is_prefetch:
                     self.usage_tracker.record_access(key)
-                    self.predictor.update_patterns(key)
+                    if hasattr(self.predictor, 'update_patterns'):
+                        self.predictor.update_patterns(key)
+                    else:
+                        self.predictor.update(key)
 
                     # Sincronizar con otros nodos si está habilitado el caché distribuido
                     if notify_distributed and self.distributed_enabled and self.distributed:

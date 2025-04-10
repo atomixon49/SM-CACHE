@@ -200,5 +200,150 @@ class TestIntelligentCachePersistence(unittest.TestCase):
         new_cache.stop()
 
 
+"""
+Pruebas unitarias para el sistema de persistencia.
+"""
+import unittest
+import os
+import json
+from cache_system.persistence import CachePersistence
+
+class TestCachePersistence(unittest.TestCase):
+    """Pruebas para el sistema de persistencia."""
+    
+    def setUp(self):
+        """Inicializa el entorno de prueba."""
+        self.test_dir = "test_persistence"
+        self.persistence = CachePersistence(self.test_dir)
+        
+        # Crear directorio si no existe
+        if not os.path.exists(self.test_dir):
+            os.makedirs(self.test_dir)
+
+    def tearDown(self):
+        """Limpia después de cada prueba."""
+        # Eliminar archivos de prueba
+        if os.path.exists(self.test_dir):
+            for file in os.listdir(self.test_dir):
+                os.remove(os.path.join(self.test_dir, file))
+            os.rmdir(self.test_dir)
+
+    def test_basic_persistence(self):
+        """Prueba operaciones básicas de persistencia."""
+        # Guardar datos
+        data = {"key1": "value1", "key2": "value2"}
+        self.persistence.save_data(data)
+        
+        # Cargar datos
+        loaded_data = self.persistence.load_data()
+        self.assertEqual(loaded_data, data)
+
+    def test_data_types(self):
+        """Prueba persistencia con diferentes tipos de datos."""
+        data = {
+            "string": "test",
+            "number": 42,
+            "float": 3.14,
+            "list": [1, 2, 3],
+            "dict": {"a": 1, "b": 2},
+            "bool": True,
+            "none": None
+        }
+        
+        self.persistence.save_data(data)
+        loaded_data = self.persistence.load_data()
+        
+        self.assertEqual(loaded_data, data)
+        self.assertIsInstance(loaded_data["string"], str)
+        self.assertIsInstance(loaded_data["number"], int)
+        self.assertIsInstance(loaded_data["float"], float)
+        self.assertIsInstance(loaded_data["list"], list)
+        self.assertIsInstance(loaded_data["dict"], dict)
+        self.assertIsInstance(loaded_data["bool"], bool)
+        self.assertIsNone(loaded_data["none"])
+
+    def test_file_corruption(self):
+        """Prueba recuperación ante corrupción de archivo."""
+        data = {"key": "value"}
+        self.persistence.save_data(data)
+        
+        # Corromper archivo
+        with open(self.persistence.file_path, 'w') as f:
+            f.write("corrupted data")
+        
+        # Debería retornar diccionario vacío
+        loaded_data = self.persistence.load_data()
+        self.assertEqual(loaded_data, {})
+
+    def test_compression(self):
+        """Prueba compresión de datos."""
+        self.persistence = CachePersistence(
+            self.test_dir,
+            compress=True
+        )
+        
+        # Datos grandes
+        data = {str(i): "x" * 1000 for i in range(100)}
+        
+        # Guardar con compresión
+        self.persistence.save_data(data)
+        
+        # Verificar que archivo comprimido es más pequeño
+        file_size = os.path.getsize(self.persistence.file_path)
+        raw_size = len(json.dumps(data).encode())
+        
+        self.assertLess(file_size, raw_size)
+        
+        # Verificar que los datos se cargan correctamente
+        loaded_data = self.persistence.load_data()
+        self.assertEqual(loaded_data, data)
+
+    def test_backup(self):
+        """Prueba sistema de respaldo."""
+        data = {"key": "value"}
+        
+        # Guardar datos y crear respaldo
+        self.persistence.save_data(data)
+        self.persistence.create_backup()
+        
+        # Verificar archivo de respaldo
+        backup_path = self.persistence.file_path + ".bak"
+        self.assertTrue(os.path.exists(backup_path))
+        
+        # Corromper archivo principal
+        os.remove(self.persistence.file_path)
+        
+        # Restaurar desde respaldo
+        self.persistence.restore_from_backup()
+        loaded_data = self.persistence.load_data()
+        self.assertEqual(loaded_data, data)
+
+    def test_concurrent_access(self):
+        """Prueba acceso concurrente."""
+        import threading
+        
+        def writer():
+            for i in range(100):
+                data = {f"key{i}": f"value{i}"}
+                self.persistence.save_data(data)
+                
+        def reader():
+            for _ in range(100):
+                self.persistence.load_data()
+        
+        # Crear hilos
+        threads = []
+        for _ in range(3):
+            t1 = threading.Thread(target=writer)
+            t2 = threading.Thread(target=reader)
+            threads.extend([t1, t2])
+            t1.start()
+            t2.start()
+            
+        # Esperar a que terminen
+        for t in threads:
+            t.join()
+
+
 if __name__ == '__main__':
     unittest.main()

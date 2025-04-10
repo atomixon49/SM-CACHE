@@ -1,3 +1,3 @@
 """
-Pruebas para el Sistema de Caché Inteligente
+Test package for the cache system.
 """

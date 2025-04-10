@@ -1,34 +1,80 @@
 """
-Módulo para monitoreo y métricas del sistema de caché inteligente.
+Sistema de monitoreo y métricas para SM-CACHE.
 """
+from typing import Dict, Any, Optional, List, Set, Tuple, Union, Callable
+from collections import deque
 import time
-import threading
 import logging
+import threading
+from prometheus_client import Counter, Gauge, Histogram, start_http_server, CollectorRegistry
 import json
 import os
-from typing import Dict, Any, List, Optional, Callable, Tuple, Union
-from collections import deque
 
 
 class MetricsCollector:
-    """
-    Recolector de métricas para el sistema de caché inteligente.
-    """
+    """Recolector de métricas mejorado con soporte Prometheus."""
     
-    def __init__(self, max_history: int = 1000):
+    def __init__(self, max_history: int = 1000, enable_prometheus: bool = True):
         """
         Inicializa el recolector de métricas.
         
         Args:
             max_history: Número máximo de puntos de datos históricos a mantener
+            enable_prometheus: Habilitar métricas Prometheus
         """
-        # Métricas básicas
+        # Crear registro único para esta instancia
+        self.registry = CollectorRegistry()
+
+        # Contadores
+        self.prom_hits = Counter('cache_hits_total', 
+                               'Total number of cache hits',
+                               registry=self.registry)
+        
+        self.prom_misses = Counter('cache_misses_total',
+                                 'Total number of cache misses',
+                                 registry=self.registry)
+        
+        self.prom_puts = Counter('cache_puts_total',
+                               'Total number of put operations',
+                               registry=self.registry)
+        
+        self.prom_evictions = Counter('cache_evictions_total',
+                                    'Total number of cache evictions',
+                                    registry=self.registry)
+        
+        self.prom_expirations = Counter('cache_expirations_total',
+                                      'Total number of key expirations',
+                                      registry=self.registry)
+
+        # Medidores
+        self.prom_memory = Gauge('cache_memory_usage_bytes',
+                               'Current memory usage in bytes',
+                               registry=self.registry)
+        
+        self.prom_items = Gauge('cache_items_current',
+                              'Current number of items in cache',
+                              registry=self.registry)
+
+        # Histogramas
+        self.prom_get_latency = Histogram('cache_get_duration_seconds',
+                                        'Get operation latency',
+                                        registry=self.registry)
+        
+        self.prom_put_latency = Histogram('cache_put_duration_seconds',
+                                        'Put operation latency',
+                                        registry=self.registry)
+
+        # Métricas internas
         self.hits = 0
         self.misses = 0
-        self.puts = 0
+        self.operations = 0
+        self.puts = 0  # Add missing puts counter
         self.evictions = 0
         self.expirations = 0
-        
+        self.prefetch_hits = 0
+        self.distributed_hits = 0
+        self._lock = threading.Lock()
+
         # Métricas de rendimiento
         self.get_times: deque = deque(maxlen=max_history)
         self.put_times: deque = deque(maxlen=max_history)
@@ -66,6 +112,14 @@ class MetricsCollector:
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger("MetricsCollector")
     
+    def start_prometheus_server(self, port: int = 8000) -> None:
+        """Inicia el servidor de métricas Prometheus."""
+        try:
+            start_http_server(port, registry=self.registry)
+            logging.info(f"Servidor Prometheus iniciado en puerto {port}")
+        except Exception as e:
+            logging.error(f"Error al iniciar servidor Prometheus: {e}")
+    
     def record_get(self, key: Any, hit: bool, elapsed_time: float, from_prefetch: bool = False) -> None:
         """
         Registra una operación de obtención.
@@ -78,14 +132,17 @@ class MetricsCollector:
         """
         if hit:
             self.hits += 1
+            self.prom_hits.inc()
             if from_prefetch:
                 self.prefetch_hits += 1
         else:
             self.misses += 1
+            self.prom_misses.inc()
             if from_prefetch:
                 self.prefetch_misses += 1
                 
         self.get_times.append(elapsed_time)
+        self.prom_get_latency.observe(elapsed_time)
         
         # Actualizar historial
         timestamp = time.time()
@@ -104,6 +161,7 @@ class MetricsCollector:
         """
         self.puts += 1
         self.put_times.append(elapsed_time)
+        self.prom_put_latency.observe(elapsed_time)
         
         # Actualizar historial
         timestamp = time.time()
@@ -117,6 +175,7 @@ class MetricsCollector:
             key: Clave eviccionada
         """
         self.evictions += 1
+        self.prom_evictions.inc()
     
     def record_expiration(self, key: Any) -> None:
         """
@@ -126,6 +185,7 @@ class MetricsCollector:
             key: Clave expirada
         """
         self.expirations += 1
+        self.prom_expirations.inc()
     
     def record_memory_usage(self, bytes_used: int, item_count: int) -> None:
         """
@@ -138,6 +198,8 @@ class MetricsCollector:
         timestamp = time.time()
         self.memory_usage.append((timestamp, bytes_used))
         self.item_count.append((timestamp, item_count))
+        self.prom_memory.set(bytes_used)
+        self.prom_items.set(item_count)
         
         # Actualizar historial
         self.history['memory_usage'].append((timestamp, bytes_used))

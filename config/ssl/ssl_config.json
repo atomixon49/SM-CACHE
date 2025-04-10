@@ -1,0 +1,19 @@
+{
+    "ssl_settings": {
+        "cert_file": "/etc/ssl/certs/sm-cache.crt",
+        "key_file": "/etc/ssl/private/sm-cache.key",
+        "ca_file": "/etc/ssl/certs/ca-certificates.crt",
+        "verify_mode": "CERT_REQUIRED",
+        "ciphers": "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384",
+        "protocols": ["TLSv1.2", "TLSv1.3"],
+        "dhparam_file": "/etc/ssl/private/dhparam.pem",
+        "session_tickets": false,
+        "stapling": true,
+        "stapling_verify": true
+    },
+    "client_auth": {
+        "required": true,
+        "trusted_ca": "/etc/ssl/certs/client-ca.crt",
+        "verify_depth": 3
+    }
+}

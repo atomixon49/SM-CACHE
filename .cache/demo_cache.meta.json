@@ -1,0 +1,12 @@
+{
+  "max_size": 1000,
+  "max_memory_mb": 10.0,
+  "ttl_enabled": true,
+  "prefetch_enabled": true,
+  "advanced_learning": true,
+  "predictor_type": "EnsemblePredictor",
+  "timestamp": 1744253912.9430602,
+  "format": "json",
+  "cache_name": "demo_cache",
+  "item_count": 23
+}

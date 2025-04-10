@@ -1,156 +1,164 @@
 """
-Módulo para la gestión automática de memoria en el sistema de caché inteligente.
+Gestor de memoria para el sistema de caché.
 """
-from typing import Dict, Any, List, Tuple, Callable, Optional
-import time
+from typing import Dict, Any, List, Optional
 import sys
-from .usage_tracker import UsageTracker
+import time
+import threading
+import logging
 
 
 class MemoryManager:
-    """
-    Clase que gestiona automáticamente la memoria del caché,
-    decidiendo qué elementos mantener y cuáles descartar.
-    """
-
-    def __init__(self,
-                 usage_tracker: UsageTracker,
-                 max_size: int = 1000,
-                 max_memory_mb: float = 100.0,
-                 size_estimator: Optional[Callable[[Any], int]] = None):
+    """Gestiona el uso de memoria del caché."""
+    
+    def __init__(self, max_size_bytes: int):
         """
         Inicializa el gestor de memoria.
-
+        
         Args:
-            usage_tracker: El rastreador de uso que proporciona datos históricos
-            max_size: Número máximo de elementos en el caché
-            max_memory_mb: Tamaño máximo de memoria en MB
-            size_estimator: Función para estimar el tamaño de un valor en bytes
+            max_size_bytes: Tamaño máximo en bytes
         """
-        self.usage_tracker = usage_tracker
-        self.max_size = max_size
-        self.max_memory_bytes = max_memory_mb * 1024 * 1024
+        self.max_size_bytes = max_size_bytes
         self.current_size = 0
-        self.current_memory_bytes = 0
-        self.size_estimator = size_estimator or self._default_size_estimator
-        self.item_sizes: Dict[Any, int] = {}
+        self.item_sizes: Dict[str, int] = {}
+        self.access_times: Dict[str, float] = {}
+        self._lock = threading.Lock()
+        
+        # Configurar logging
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger("MemoryManager")
 
-    def _default_size_estimator(self, value: Any) -> int:
+    def add_item(self, key: str, value: Any) -> bool:
         """
-        Estima el tamaño en bytes de un valor.
-
+        Añade un elemento y registra su tamaño.
+        
         Args:
-            value: El valor a estimar
-
+            key: Clave del elemento
+            value: Valor a almacenar
+            
         Returns:
-            Tamaño estimado en bytes
+            True si se añadió correctamente, False si no hay espacio
         """
-        return sys.getsizeof(value)
+        size = self._estimate_size(value)
+        
+        with self._lock:
+            if self.current_size + size > self.max_size_bytes:
+                return False
+                
+            self.item_sizes[key] = size
+            self.current_size += size
+            self.access_times[key] = time.time()
+            
+            return True
 
-    def add_item(self, key: Any, value: Any) -> None:
+    def remove_item(self, key: str) -> None:
         """
-        Registra un nuevo elemento en el gestor de memoria.
-
+        Elimina un elemento y actualiza el uso de memoria.
+        
         Args:
-            key: La clave del elemento
-            value: El valor del elemento
+            key: Clave del elemento a eliminar
         """
-        # Estimar el tamaño del valor
-        size = self.size_estimator(value)
+        with self._lock:
+            if key in self.item_sizes:
+                self.current_size -= self.item_sizes[key]
+                del self.item_sizes[key]
+                del self.access_times[key]
 
-        # Actualizar el tamaño total
-        if key in self.item_sizes:
-            self.current_memory_bytes -= self.item_sizes[key]
-
-        self.item_sizes[key] = size
-        self.current_memory_bytes += size
-        self.current_size = len(self.item_sizes)
-
-    def remove_item(self, key: Any) -> None:
+    def update_item(self, key: str, value: Any) -> bool:
         """
-        Elimina un elemento del gestor de memoria.
-
+        Actualiza un elemento existente.
+        
         Args:
-            key: La clave del elemento a eliminar
-        """
-        if key in self.item_sizes:
-            self.current_memory_bytes -= self.item_sizes[key]
-            del self.item_sizes[key]
-            self.current_size = len(self.item_sizes)
-
-    def is_memory_full(self) -> bool:
-        """
-        Verifica si la memoria está llena según los límites establecidos.
-
+            key: Clave del elemento
+            value: Nuevo valor
+            
         Returns:
-            True si la memoria está llena, False en caso contrario
+            True si se actualizó correctamente, False si no hay espacio
         """
-        return (self.current_size >= self.max_size or
-                self.current_memory_bytes >= self.max_memory_bytes)
+        with self._lock:
+            # Eliminar tamaño anterior
+            if key in self.item_sizes:
+                self.current_size -= self.item_sizes[key]
+                
+            # Calcular nuevo tamaño
+            new_size = self._estimate_size(value)
+            
+            # Verificar espacio
+            if self.current_size + new_size > self.max_size_bytes:
+                # Restaurar tamaño anterior si existía
+                if key in self.item_sizes:
+                    self.current_size += self.item_sizes[key]
+                return False
+                
+            # Actualizar
+            self.item_sizes[key] = new_size
+            self.current_size += new_size
+            self.access_times[key] = time.time()
+            
+            return True
 
-    def get_eviction_candidates(self, count: int = 1) -> List[Any]:
+    def get_eviction_candidates(self, count: int) -> List[str]:
         """
-        Obtiene las claves candidatas para ser eliminadas del caché.
-
+        Obtiene candidatos para evicción basado en acceso y tamaño.
+        
         Args:
-            count: Número de candidatos a devolver
-
+            count: Número de candidatos a retornar
+            
         Returns:
             Lista de claves candidatas para evicción
         """
-        # Calcular puntuación para cada elemento
-        scores = []
-        current_time = time.time()
+        with self._lock:
+            # Ordenar por último acceso (más antiguo primero)
+            sorted_items = sorted(
+                self.access_times.items(),
+                key=lambda x: (x[1], -self.item_sizes.get(x[0], 0))
+            )
+            
+            return [key for key, _ in sorted_items[:count]]
 
-        for key in self.item_sizes:
-            # Factores para la puntuación:
-            # 1. Frecuencia de acceso (menor es mejor para evicción)
-            frequency = self.usage_tracker.get_access_frequency(key)
-
-            # 2. Tiempo desde el último acceso (mayor es mejor para evicción)
-            last_access = self.usage_tracker.get_last_access_time(key)
-            recency = current_time - last_access if last_access > 0 else current_time
-
-            # 3. Tamaño del elemento (mayor es mejor para evicción)
-            size = self.item_sizes[key]
-
-            # Calcular puntuación (mayor puntuación = mejor candidato para evicción)
-            # Normalizar cada factor para que tenga un peso adecuado
-            if frequency == 0:
-                frequency = 0.1  # Evitar división por cero
-
-            score = (recency * size) / frequency
-            scores.append((key, score))
-
-        # Ordenar por puntuación (mayor primero)
-        scores.sort(key=lambda x: x[1], reverse=True)
-
-        # Devolver las claves con mayor puntuación
-        return [key for key, _ in scores[:count]]
-
-    def get_memory_usage(self) -> int:
+    def is_memory_full(self) -> bool:
         """
-        Obtiene el uso actual de memoria en bytes.
-
+        Verifica si la memoria está llena.
+        
         Returns:
-            Uso de memoria en bytes
+            True si la memoria está llena, False en caso contrario
         """
-        return self.current_memory_bytes
+        return self.current_size >= self.max_size_bytes
 
-    def get_memory_usage_stats(self) -> Dict[str, Any]:
+    def get_memory_usage(self) -> Dict[str, Any]:
         """
-        Obtiene estadísticas sobre el uso de memoria.
-
+        Obtiene estadísticas de uso de memoria.
+        
         Returns:
-            Diccionario con estadísticas de uso de memoria
+            Diccionario con estadísticas de memoria
         """
-        return {
-            'current_size': self.current_size,
-            'max_size': self.max_size,
-            'current_memory_mb': self.current_memory_bytes / (1024 * 1024),
-            'max_memory_mb': self.max_memory_bytes / (1024 * 1024),
-            'memory_usage_percent': (self.current_memory_bytes / self.max_memory_bytes) * 100
-                                    if self.max_memory_bytes > 0 else 0,
-            'size_usage_percent': (self.current_size / self.max_size) * 100
-                                  if self.max_size > 0 else 0
-        }
+        with self._lock:
+            return {
+                'current_size': self.current_size,
+                'max_size': self.max_size_bytes,
+                'item_count': len(self.item_sizes),
+                'usage_percent': (self.current_size / self.max_size_bytes) * 100
+            }
+
+    def _estimate_size(self, value: Any) -> int:
+        """
+        Estima el tamaño en bytes de un valor.
+        
+        Args:
+            value: Valor a estimar
+            
+        Returns:
+            Tamaño estimado en bytes
+        """
+        size = sys.getsizeof(value)
+        
+        # Estimación recursiva para contenedores
+        if isinstance(value, (list, tuple, set)):
+            size += sum(self._estimate_size(item) for item in value)
+        elif isinstance(value, dict):
+            size += sum(self._estimate_size(k) + self._estimate_size(v) 
+                       for k, v in value.items())
+        elif isinstance(value, str):
+            size = len(value.encode('utf-8'))
+            
+        return size

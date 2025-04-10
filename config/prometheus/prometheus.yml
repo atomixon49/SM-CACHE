@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'sm-cache'
+    static_configs:
+      - targets: 
+        - 'cache-node-1:9090'
+        - 'cache-node-2:9091'
+        - 'cache-node-3:9092'
+    metrics_path: '/metrics'
+    scheme: 'http'
