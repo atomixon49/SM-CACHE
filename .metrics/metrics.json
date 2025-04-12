@@ -1,16 +1,16 @@
 {
   "operations": {
-    "gets": 18,
-    "hits": 12,
-    "misses": 6,
-    "puts": 37,
-    "evictions": 24,
-    "expirations": 33
+    "gets": 0,
+    "hits": 0,
+    "misses": 0,
+    "puts": 0,
+    "evictions": 0,
+    "expirations": 0
   },
   "performance": {
-    "hit_rate": 66.66666666666666,
-    "avg_get_time": 0.03362168206108941,
-    "avg_put_time": 0.0004192622932227882
+    "hit_rate": 0,
+    "avg_get_time": 0,
+    "avg_put_time": 0
   },
   "prefetch": {
     "hits": 0,
@@ -29,5 +29,5 @@
     "misses": 0,
     "hit_rate": 0
   },
-  "timestamp": 1744253912.9695766
+  "timestamp": 1744341143.615524
 }
